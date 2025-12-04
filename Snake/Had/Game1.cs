@@ -77,6 +77,15 @@ namespace Had
         private double _faceTimer = 0.0;
         private const double FaceInterval = 0.7; // seconds between face changes
 
+        // --- Streak glyph background display state ---
+        // We'll keep per-number visibility and base positions so they can float smoothly
+        private float[] _streakVis = Array.Empty<float>();
+        private Vector2[] _streakBasePos = Array.Empty<Vector2>();
+        private float[] _streakPhase = Array.Empty<float>();
+        private float _streakAnimTime = 0f;
+        private const float StreakFloatAmplitude = 18f; // how far they float
+        private const float StreakAnimSpeed = 1.6f; // speed of floating
+
         public Game1()
         {
             _graphics = new GraphicsDeviceManager(this);
@@ -110,6 +119,19 @@ namespace Had
             // ensure grid matches window
             _gridWidth = _graphics.PreferredBackBufferWidth / CellSize;
             _gridHeight = _graphics.PreferredBackBufferHeight / CellSize;
+
+            // Initialize streak glyph arrays
+            _streakVis = new float[MaxStreak];
+            _streakBasePos = new Vector2[MaxStreak];
+            _streakPhase = new float[MaxStreak];
+            for (int i = 0; i < MaxStreak; i++)
+            {
+                float x = (_graphics.PreferredBackBufferWidth) * (float)(i + 1) / (float)(MaxStreak + 1);
+                float y = 24f + (float)(_rng.NextDouble() * 18.0 - 9.0); // slight random vertical offset
+                _streakBasePos[i] = new Vector2(x, y);
+                _streakPhase[i] = (float)(_rng.NextDouble() * Math.PI * 2.0);
+                _streakVis[i] = 0f;
+            }
 
             // Initialize snake in center
             _snake.Clear();
@@ -165,6 +187,19 @@ namespace Had
             _cherryParticleTimer = 0f;
             _streak = 0;
             _timeSinceLastCherry = 100f;
+
+            // reset streak glyph positions & visibility
+            _streakVis = new float[MaxStreak];
+            _streakBasePos = new Vector2[MaxStreak];
+            _streakPhase = new float[MaxStreak];
+            for (int i = 0; i < MaxStreak; i++)
+            {
+                float x = (_graphics.PreferredBackBufferWidth) * (float)(i + 1) / (float)(MaxStreak + 1);
+                float y = 24f + (float)(_rng.NextDouble() * 18.0 - 9.0);
+                _streakBasePos[i] = new Vector2(x, y);
+                _streakPhase[i] = (float)(_rng.NextDouble() * Math.PI * 2.0);
+                _streakVis[i] = 0f;
+            }
 
             PlaceCherry();
         }
@@ -243,6 +278,15 @@ namespace Had
                     float size = (float)(_rng.NextDouble() * 8 + 2) * 0.6f; // smaller background
                     SpawnParticle(pos, vel, life, _snakeOutline * 0.6f, size, background: true, persistent: false);
                 }
+            }
+
+            // Update streak glyph animation state
+            _streakAnimTime += dt * StreakAnimSpeed;
+            for (int i = 0; i < MaxStreak; i++)
+            {
+                float target = (_streak >= (i + 1)) ? 1f : 0f;
+                // smooth the visibility in/out
+                _streakVis[i] = MathHelper.Lerp(_streakVis[i], target, Math.Min(1f, dt * 8f));
             }
 
             base.Update(gameTime);
@@ -421,6 +465,13 @@ namespace Had
             // recompute grid size to match new window (cells are fixed size)
             _gridWidth = Math.Max(1, _graphics.PreferredBackBufferWidth / CellSize);
             _gridHeight = Math.Max(1, _graphics.PreferredBackBufferHeight / CellSize);
+
+            // update streak base positions so they remain near the top
+            for (int i = 0; i < MaxStreak; i++)
+            {
+                float x = (_graphics.PreferredBackBufferWidth) * (float)(i + 1) / (float)(MaxStreak + 1);
+                _streakBasePos[i].X = x;
+            }
         }
 
         private void SpawnParticle(Vector2 pos, Vector2 vel, float life, Color color, float size, bool background = false, bool persistent = false)
@@ -457,6 +508,35 @@ namespace Had
             }
 
             _spriteBatch.Begin(transformMatrix: Matrix.CreateTranslation(shakeOffset.X, shakeOffset.Y, 0), samplerState: SamplerState.PointClamp);
+
+            // Draw subtle big streak numbers in the upper background area (draw before particles so they sit behind)
+            for (int i = 0; i < MaxStreak; i++)
+            {
+                float vis = _streakVis[i];
+                if (vis <= 0.01f) continue;
+
+                int num = i + 1;
+                // normalized strength of this glyph (1..MaxStreak)
+                float norm = (num) / (float)MaxStreak;
+                // base alpha increases with the digit index so '1' is faint, higher numbers more visible
+                float baseAlpha = 0.15f + 0.6f * norm; // range ~0.15..0.75
+                float alpha = baseAlpha * vis;
+
+                // floating offset using a shared anim time and a per-glyph phase
+                float phase = _streakPhase[i];
+                float fx = MathF.Cos(_streakAnimTime + phase) * StreakFloatAmplitude * (0.6f + 0.4f * norm);
+                float fy = MathF.Sin(_streakAnimTime * 1.3f + phase * 0.7f) * (StreakFloatAmplitude * 0.45f) * (0.6f + 0.4f * norm);
+                var pos = _streakBasePos[i] + new Vector2(fx, fy);
+
+                // slight size pulse so they feel alive
+                float sizePulse = 1f + 0.08f * MathF.Sin(_streakAnimTime * 2.0f + phase);
+                int scale = Math.Max(3, (int)(8 * sizePulse)); // base big scale=8
+
+                // red tint for numbers
+                var col = new Color(220, 40, 40) * alpha;
+
+                DrawPixelText(num.ToString(), pos, col, scale: scale);
+            }
 
             // Draw background particles first
             for (int i = 0; i < _bgParticles.Count; i++)
