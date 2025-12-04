@@ -13,8 +13,12 @@ namespace Had
 
         // Grid
         private const int CellSize = 32;
-        private const int GridWidth = 20;
-        private const int GridHeight = 15;
+        private int _gridWidth = 20;
+        private int _gridHeight = 15;
+
+        // store initial sizes so we can reset on death
+        private readonly int _initialBackBufferWidth;
+        private readonly int _initialBackBufferHeight;
 
         // Snake
         private readonly List<Point> _snake = new();
@@ -54,17 +58,46 @@ namespace Had
             Content.RootDirectory = "Content";
             IsMouseVisible = true;
 
+            // initial grid size
+            _gridWidth = 20;
+            _gridHeight = 15;
+
+            // store initial pixel sizes so we can restore on death
+            _initialBackBufferWidth = _gridWidth * CellSize;
+            _initialBackBufferHeight = _gridHeight * CellSize;
+
             // set window size based on grid
-            _graphics.PreferredBackBufferWidth = GridWidth * CellSize;
-            _graphics.PreferredBackBufferHeight = GridHeight * CellSize;
+            _graphics.PreferredBackBufferWidth = _initialBackBufferWidth;
+            _graphics.PreferredBackBufferHeight = _initialBackBufferHeight;
             _graphics.ApplyChanges();
         }
 
         protected override void Initialize()
         {
-            // Initialize snake in center
+            // reset window back to initial and initialize game state
+            ResetGame();
+
+            base.Initialize();
+        }
+
+        // Resets window and game state when player dies (or on start)
+        private void ResetGame()
+        {
+            // restore window size to initial
+            if (_graphics.PreferredBackBufferWidth != _initialBackBufferWidth || _graphics.PreferredBackBufferHeight != _initialBackBufferHeight)
+            {
+                _graphics.PreferredBackBufferWidth = _initialBackBufferWidth;
+                _graphics.PreferredBackBufferHeight = _initialBackBufferHeight;
+                _graphics.ApplyChanges();
+            }
+
+            // recompute grid size
+            _gridWidth = Math.Max(1, _graphics.PreferredBackBufferWidth / CellSize);
+            _gridHeight = Math.Max(1, _graphics.PreferredBackBufferHeight / CellSize);
+
+            // reset snake in center
             _snake.Clear();
-            var start = new Point(GridWidth / 2, GridHeight / 2);
+            var start = new Point(_gridWidth / 2, _gridHeight / 2);
             _snake.Add(start);
             _snake.Add(new Point(start.X - 1, start.Y));
             _snake.Add(new Point(start.X - 2, start.Y));
@@ -72,9 +105,10 @@ namespace Had
             _moveTimer = 0;
             _growNextMove = false;
 
-            PlaceApple();
+            // clear particles so they don't linger across size changes
+            _particles.Clear();
 
-            base.Initialize();
+            PlaceApple();
         }
 
         protected override void LoadContent()
@@ -138,11 +172,11 @@ namespace Had
             var head = _snake[0];
             var newHead = new Point(head.X + _direction.X, head.Y + _direction.Y);
 
-            // wrap around
-            if (newHead.X < 0) newHead.X = GridWidth - 1;
-            if (newHead.X >= GridWidth) newHead.X = 0;
-            if (newHead.Y < 0) newHead.Y = GridHeight - 1;
-            if (newHead.Y >= GridHeight) newHead.Y = 0;
+            // wrap around using current grid size
+            if (newHead.X < 0) newHead.X = _gridWidth - 1;
+            if (newHead.X >= _gridWidth) newHead.X = 0;
+            if (newHead.Y < 0) newHead.Y = _gridHeight - 1;
+            if (newHead.Y >= _gridHeight) newHead.Y = 0;
 
             // Self-collision -> reset game (simple)
             for (int i = 0; i < _snake.Count; i++)
@@ -150,8 +184,8 @@ namespace Had
                 if (_snake[i] == newHead)
                 {
                     // reset
-                    Initialize();
                     _score = 0;
+                    ResetGame();
                     return;
                 }
             }
@@ -173,6 +207,8 @@ namespace Had
                 _growNextMove = true;
                 PlaceApple();
                 SpawnAppleBurst(new Vector2(newHead.X * CellSize + CellSize / 2f, newHead.Y * CellSize + CellSize / 2f));
+                // expand window slightly each time an apple is picked
+                ExpandWindow();
             }
         }
 
@@ -180,8 +216,8 @@ namespace Had
         {
             // choose a random free cell
             var free = new List<Point>();
-            for (int x = 0; x < GridWidth; x++)
-            for (int y = 0; y < GridHeight; y++)
+            for (int x = 0; x < _gridWidth; x++)
+            for (int y = 0; y < _gridHeight; y++)
             {
                 var p = new Point(x, y);
                 if (!_snake.Contains(p)) free.Add(p);
@@ -211,6 +247,20 @@ namespace Had
                 var size = (float)(_rng.NextDouble() * 3 + 2);
                 SpawnParticle(position, vel, life, _snakeOutline, size);
             }
+        }
+
+        // Expand the game window by half the cell size in both dimensions
+        private void ExpandWindow()
+        {
+            var add = CellSize / 2; // half a segment
+            // Increase preferred back buffer size and apply changes
+            _graphics.PreferredBackBufferWidth += add;
+            _graphics.PreferredBackBufferHeight += add;
+            _graphics.ApplyChanges();
+
+            // recompute grid size to match new window (cells are fixed size)
+            _gridWidth = Math.Max(1, _graphics.PreferredBackBufferWidth / CellSize);
+            _gridHeight = Math.Max(1, _graphics.PreferredBackBufferHeight / CellSize);
         }
 
         private void SpawnParticle(Vector2 pos, Vector2 vel, float life, Color color, float size)
