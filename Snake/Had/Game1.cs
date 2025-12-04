@@ -77,14 +77,14 @@ namespace Had
         private double _faceTimer = 0.0;
         private const double FaceInterval = 0.7; // seconds between face changes
 
-        // --- Streak glyph background display state ---
-        // We'll keep per-number visibility and base positions so they can float smoothly
-        private float[] _streakVis = Array.Empty<float>();
-        private Vector2[] _streakBasePos = Array.Empty<Vector2>();
-        private float[] _streakPhase = Array.Empty<float>();
-        private float _streakAnimTime = 0f;
-        private const float StreakFloatAmplitude = 18f; // how far they float
-        private const float StreakAnimSpeed = 1.6f; // speed of floating
+        // --- Streak display (single big number) ---
+        private int _streakDisplayNumber = 0; // 0 = none, otherwise 1..MaxStreak
+        // pop animation when a cherry is picked
+        private float _streakPopTimer = 0f;
+        private const float StreakPopDuration = 0.5f; // short pop animation
+        // fade when streak runs out
+        private float _streakFadeTimer = 0f;
+        private const float StreakFadeDuration = 0.6f;
 
         public Game1()
         {
@@ -120,19 +120,6 @@ namespace Had
             _gridWidth = _graphics.PreferredBackBufferWidth / CellSize;
             _gridHeight = _graphics.PreferredBackBufferHeight / CellSize;
 
-            // Initialize streak glyph arrays
-            _streakVis = new float[MaxStreak];
-            _streakBasePos = new Vector2[MaxStreak];
-            _streakPhase = new float[MaxStreak];
-            for (int i = 0; i < MaxStreak; i++)
-            {
-                float x = (_graphics.PreferredBackBufferWidth) * (float)(i + 1) / (float)(MaxStreak + 1);
-                float y = 24f + (float)(_rng.NextDouble() * 18.0 - 9.0); // slight random vertical offset
-                _streakBasePos[i] = new Vector2(x, y);
-                _streakPhase[i] = (float)(_rng.NextDouble() * Math.PI * 2.0);
-                _streakVis[i] = 0f;
-            }
-
             // Initialize snake in center
             _snake.Clear();
             var start = new Point(_gridWidth / 2, _gridHeight / 2);
@@ -150,6 +137,11 @@ namespace Had
             _streak = 0;
             _timeSinceLastCherry = 100f;
             _deaths = 0;
+
+            // reset streak display
+            _streakDisplayNumber = 0;
+            _streakPopTimer = 0f;
+            _streakFadeTimer = 0f;
 
             PlaceCherry();
 
@@ -188,18 +180,10 @@ namespace Had
             _streak = 0;
             _timeSinceLastCherry = 100f;
 
-            // reset streak glyph positions & visibility
-            _streakVis = new float[MaxStreak];
-            _streakBasePos = new Vector2[MaxStreak];
-            _streakPhase = new float[MaxStreak];
-            for (int i = 0; i < MaxStreak; i++)
-            {
-                float x = (_graphics.PreferredBackBufferWidth) * (float)(i + 1) / (float)(MaxStreak + 1);
-                float y = 24f + (float)(_rng.NextDouble() * 18.0 - 9.0);
-                _streakBasePos[i] = new Vector2(x, y);
-                _streakPhase[i] = (float)(_rng.NextDouble() * Math.PI * 2.0);
-                _streakVis[i] = 0f;
-            }
+            // reset streak display
+            _streakDisplayNumber = 0;
+            _streakPopTimer = 0f;
+            _streakFadeTimer = 0f;
 
             PlaceCherry();
         }
@@ -247,6 +231,11 @@ namespace Had
             {
                 // break streak if timed out
                 _streak = 0;
+                // begin fade if we were showing a number
+                if (_streakDisplayNumber > 0 && _streakFadeTimer <= 0f)
+                {
+                    _streakFadeTimer = StreakFadeDuration;
+                }
             }
 
             // update shake timer
@@ -280,13 +269,22 @@ namespace Had
                 }
             }
 
-            // Update streak glyph animation state
-            _streakAnimTime += dt * StreakAnimSpeed;
-            for (int i = 0; i < MaxStreak; i++)
+            // Update pop & fade timers for streak display
+            if (_streakPopTimer > 0f)
             {
-                float target = (_streak >= (i + 1)) ? 1f : 0f;
-                // smooth the visibility in/out
-                _streakVis[i] = MathHelper.Lerp(_streakVis[i], target, Math.Min(1f, dt * 8f));
+                _streakPopTimer -= dt;
+                if (_streakPopTimer < 0f) _streakPopTimer = 0f;
+            }
+
+            if (_streakFadeTimer > 0f)
+            {
+                _streakFadeTimer -= dt;
+                if (_streakFadeTimer <= 0f)
+                {
+                    // finished fading out
+                    _streakFadeTimer = 0f;
+                    _streakDisplayNumber = 0;
+                }
             }
 
             base.Update(gameTime);
@@ -376,6 +374,12 @@ namespace Had
                     // amplitude scales with streak but has a max
                     _shakeAmplitude = Math.Min(MaxShakeAmplitude, 2f + _streak * 2.5f);
                 }
+
+                // Start the big streak display animation for the current streak
+                _streakDisplayNumber = _streak;
+                _streakPopTimer = StreakPopDuration;
+                // cancel any fade-out in progress
+                _streakFadeTimer = 0f;
             }
         }
 
@@ -465,13 +469,6 @@ namespace Had
             // recompute grid size to match new window (cells are fixed size)
             _gridWidth = Math.Max(1, _graphics.PreferredBackBufferWidth / CellSize);
             _gridHeight = Math.Max(1, _graphics.PreferredBackBufferHeight / CellSize);
-
-            // update streak base positions so they remain near the top
-            for (int i = 0; i < MaxStreak; i++)
-            {
-                float x = (_graphics.PreferredBackBufferWidth) * (float)(i + 1) / (float)(MaxStreak + 1);
-                _streakBasePos[i].X = x;
-            }
         }
 
         private void SpawnParticle(Vector2 pos, Vector2 vel, float life, Color color, float size, bool background = false, bool persistent = false)
@@ -509,35 +506,6 @@ namespace Had
 
             _spriteBatch.Begin(transformMatrix: Matrix.CreateTranslation(shakeOffset.X, shakeOffset.Y, 0), samplerState: SamplerState.PointClamp);
 
-            // Draw subtle big streak numbers in the upper background area (draw before particles so they sit behind)
-            for (int i = 0; i < MaxStreak; i++)
-            {
-                float vis = _streakVis[i];
-                if (vis <= 0.01f) continue;
-
-                int num = i + 1;
-                // normalized strength of this glyph (1..MaxStreak)
-                float norm = (num) / (float)MaxStreak;
-                // base alpha increases with the digit index so '1' is faint, higher numbers more visible
-                float baseAlpha = 0.15f + 0.6f * norm; // range ~0.15..0.75
-                float alpha = baseAlpha * vis;
-
-                // floating offset using a shared anim time and a per-glyph phase
-                float phase = _streakPhase[i];
-                float fx = MathF.Cos(_streakAnimTime + phase) * StreakFloatAmplitude * (0.6f + 0.4f * norm);
-                float fy = MathF.Sin(_streakAnimTime * 1.3f + phase * 0.7f) * (StreakFloatAmplitude * 0.45f) * (0.6f + 0.4f * norm);
-                var pos = _streakBasePos[i] + new Vector2(fx, fy);
-
-                // slight size pulse so they feel alive
-                float sizePulse = 1f + 0.08f * MathF.Sin(_streakAnimTime * 2.0f + phase);
-                int scale = Math.Max(3, (int)(8 * sizePulse)); // base big scale=8
-
-                // red tint for numbers
-                var col = new Color(220, 40, 40) * alpha;
-
-                DrawPixelText(num.ToString(), pos, col, scale: scale);
-            }
-
             // Draw background particles first
             for (int i = 0; i < _bgParticles.Count; i++)
             {
@@ -547,6 +515,43 @@ namespace Had
                 var size = Math.Max(2f, p.Size * (0.5f + t * 0.7f));
                 var rect = new Rectangle((int)(p.Position.X - size / 2), (int)(p.Position.Y - size / 2), (int)size, (int)size);
                 _spriteBatch.Draw(_pixel, rect, col);
+            }
+
+            // Draw big popping streak number centered in the upper area (above background particles)
+            if (_streakDisplayNumber > 0)
+            {
+                // overall visibility alpha from fade timer (if fading)
+                float fadeAlpha = (_streakFadeTimer > 0f) ? (_streakFadeTimer / StreakFadeDuration) : 1f;
+
+                // pop progress 0..1
+                float popProgress = 1f;
+                if (_streakPopTimer > 0f) popProgress = 1f - (_streakPopTimer / StreakPopDuration);
+                popProgress = MathHelper.Clamp(popProgress, 0f, 1f);
+
+                int num = _streakDisplayNumber;
+
+                // scales: final settled scale and a larger peak for the pop
+                float finalScaleF = 14f + num * 8f; // base settled size
+                float peakScaleF = finalScaleF * 2.2f; // how big it pops
+
+                // use a single-peaked sine curve so it grows to peak then settles back
+                float sinPeak = MathF.Sin(popProgress * MathF.PI); // 0->1->0
+                float curScaleF = finalScaleF + (peakScaleF - finalScaleF) * sinPeak;
+                int curScale = Math.Max(6, (int)curScaleF);
+
+                // alpha: strong during pop, slightly lower when settled, and multiplied by fadeAlpha
+                float baseAlpha = (_streakPopTimer > 0f) ? 1f : 0.75f;
+                float alpha = baseAlpha * fadeAlpha;
+                var col = new Color(220, 40, 40) * alpha;
+
+                // center position
+                float centerX = _graphics.PreferredBackBufferWidth * 0.5f;
+                float topY = MathF.Max(10f, _graphics.PreferredBackBufferHeight * 0.12f);
+                // slight bob while popping
+                float bob = (_streakPopTimer > 0f) ? MathF.Sin(popProgress * MathF.PI) * 12f : 0f;
+                var drawPos = new Vector2(centerX - (4 * curScale) * 0.5f, topY - (curScale * 2f) + bob);
+
+                DrawPixelText(num.ToString(), drawPos, col, scale: curScale);
             }
 
             // Draw cherry (red square)
