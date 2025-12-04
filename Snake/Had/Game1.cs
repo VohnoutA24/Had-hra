@@ -55,6 +55,20 @@ namespace Had
         // Background emitter enabled at or above this score
         private const int BackgroundEnableScore = 5;
 
+        // Streak and screenshake
+        private int _streak = 0; // consecutive quick pickups
+        private float _timeSinceLastCherry = 100f;
+        private const float StreakTimeout = 3.5f; // time to break streak
+        private int _firstCherryBurstCount = 48; // baseline burst count when starting a streak
+        private const int MaxStreak = 6; // cap streak
+        private const int MaxBurstMultiplier = 6; // cap multiplier for burst size
+
+        // screen shake
+        private float _shakeTimer = 0f;
+        private float _shakeDuration = 0.45f;
+        private float _shakeAmplitude = 0f;
+        private const float MaxShakeAmplitude = 12f;
+
         // Faces
         private readonly List<string> _faces = new() { ":3", "^w^", "˃ w ˂", "UwU", "0w0", "(w)", "n_n" };
         private int _currentFaceIndex = 0;
@@ -109,6 +123,8 @@ namespace Had
             _bgParticles.Clear();
             _fgParticles.Clear();
             _cherryParticleTimer = 0f;
+            _streak = 0;
+            _timeSinceLastCherry = 100f;
 
             PlaceCherry();
 
@@ -144,6 +160,8 @@ namespace Had
             _bgParticles.Clear();
             _fgParticles.Clear();
             _cherryParticleTimer = 0f;
+            _streak = 0;
+            _timeSinceLastCherry = 100f;
 
             PlaceCherry();
         }
@@ -185,6 +203,21 @@ namespace Had
             UpdateParticleList(_bgParticles, dt);
             UpdateParticleList(_fgParticles, dt);
 
+            // advance streak timer
+            _timeSinceLastCherry += dt;
+            if (_timeSinceLastCherry > StreakTimeout)
+            {
+                // break streak if timed out
+                _streak = 0;
+            }
+
+            // update shake timer
+            if (_shakeTimer > 0f)
+            {
+                _shakeTimer -= dt;
+                if (_shakeTimer <= 0f) { _shakeTimer = 0f; _shakeAmplitude = 0f; }
+            }
+
             // If we have an active cherry burst timer, emit particles around the snake head for a few seconds
             if (_cherryParticleTimer > 0f)
             {
@@ -205,7 +238,7 @@ namespace Had
                     var vel = new Vector2((float)(_rng.NextDouble() * 40 - 20), (float)(_rng.NextDouble() * 40 - 20));
                     float life = 6f + (float)(_rng.NextDouble() * 6f);
                     float size = (float)(_rng.NextDouble() * 8 + 2) * 0.6f; // smaller background
-                    SpawnParticle(pos, vel, life, _snakeOutline * 0.6f, size, background: true);
+                    SpawnParticle(pos, vel, life, _snakeOutline * 0.6f, size, background: true, persistent: false);
                 }
             }
 
@@ -257,17 +290,44 @@ namespace Had
             // cherry collision
             if (newHead == _cherry)
             {
+                // streak logic: if we picked recently, grow streak; otherwise start new streak
+                if (_timeSinceLastCherry <= StreakTimeout && _streak > 0)
+                {
+                    _streak = Math.Min(_streak + 1, MaxStreak);
+                }
+                else
+                {
+                    // new streak start: record the baseline burst count for this first cherry
+                    _streak = 1;
+                    _firstCherryBurstCount = 48 + Math.Min(200, _score * 8);
+                }
+
+                _timeSinceLastCherry = 0f;
+
                 _score += 1;
                 _growNextMove = true;
                 PlaceCherry();
+
+                // spawn burst sized by streak (cap multiplier to keep playable)
+                int burstCount = Math.Min(_firstCherryBurstCount * Math.Max(1, _streak), _firstCherryBurstCount * MaxBurstMultiplier);
+                SpawnBurstAroundSnake(newHead, burstCount);
+
+                // smaller explosion burst too
                 SpawnCherryBurst(new Vector2(newHead.X * CellSize + CellSize / 2f, newHead.Y * CellSize + CellSize / 2f));
+
                 // expand window slightly each time a cherry is picked
                 ExpandWindow();
 
                 // trigger a short-lived emitter around the snake
                 _cherryParticleTimer = CherryParticleDuration;
-                // initial burst around snake
-                SpawnBurstAroundSnake(newHead, count: 48 + Math.Min(200, _score * 8));
+
+                // screenshake when streak >= 2
+                if (_streak >= 2)
+                {
+                    _shakeTimer = _shakeDuration;
+                    // amplitude scales with streak but has a max
+                    _shakeAmplitude = Math.Min(MaxShakeAmplitude, 2f + _streak * 2.5f);
+                }
             }
         }
 
@@ -300,18 +360,20 @@ namespace Had
                 var angle = (float)(_rng.NextDouble() * Math.PI * 2.0);
                 var dist = (float)(_rng.NextDouble() * CellSize * 1.2);
                 var pos = center + new Vector2((float)Math.Cos(angle), (float)Math.Sin(angle)) * dist;
-                var speed = (float)(_rng.NextDouble() * 220 + 40);
+                var speed = (float)(_rng.NextDouble() * 220 + 40) * (1f + 0.06f * _streak);
                 var vel = new Vector2((float)Math.Cos(angle), (float)Math.Sin(angle)) * speed + new Vector2((float)(_rng.NextDouble() * 40 - 20), (float)(_rng.NextDouble() * 40 - 20));
                 var life = 0.8f + (float)(_rng.NextDouble() * 1.2f);
-                var size = (float)(_rng.NextDouble() * 8 + 3) * (1f + _score * 0.08f);
-                SpawnParticle(pos, vel, life, _snakeOutline, size, background: false);
+                var size = (float)(_rng.NextDouble() * 8 + 3) * (1f + _streak * 0.08f);
+                // mark these as persistent (they stay around the snake and should be semi-transparent)
+                SpawnParticle(pos, vel, life, _snakeOutline, size, background: false, persistent: true);
             }
         }
 
         private void EmitAroundSnake(float dt)
         {
             // emit a modest number of particles per frame around head while timer active
-            int perFrame = 8 + (int)(_score / 2);
+            int perFrame = (8 + (int)(_score / 2)) * Math.Max(1, _streak);
+            perFrame = Math.Min(perFrame, 60); // cap per-frame for performance
             var head = _snake[0];
             var center = new Vector2(head.X * CellSize + CellSize / 2f, head.Y * CellSize + CellSize / 2f);
             for (int i = 0; i < perFrame && (_bgParticles.Count + _fgParticles.Count) < MaxParticles; i++)
@@ -321,8 +383,9 @@ namespace Had
                 var pos = center + new Vector2((float)Math.Cos(angle), (float)Math.Sin(angle)) * dist;
                 var vel = new Vector2((float)(_rng.NextDouble() * 80 - 40), (float)(_rng.NextDouble() * -80));
                 var life = 0.6f + (float)(_rng.NextDouble() * 1.0f);
-                var size = (float)(_rng.NextDouble() * 6 + 2) * (1f + _score * 0.06f);
-                SpawnParticle(pos, vel, life, _snakeOutline, size, background: false);
+                var size = (float)(_rng.NextDouble() * 6 + 2) * (1f + _streak * 0.06f);
+                // these are also persistent around-snake particles
+                SpawnParticle(pos, vel, life, _snakeOutline, size, background: false, persistent: true);
             }
         }
 
@@ -337,7 +400,8 @@ namespace Had
                 var vel = new Vector2((float)Math.Cos(angle), (float)Math.Sin(angle)) * speed;
                 var life = 0.6f + (float)(_rng.NextDouble() * 1.2f);
                 var size = (float)(_rng.NextDouble() * 8 + 3) * (1f + _score * 0.08f);
-                SpawnParticle(position, vel, life, _snakeOutline, size, background: false);
+                // explosion particles are not persistent and should be full opacity
+                SpawnParticle(position, vel, life, _snakeOutline, size, background: false, persistent: false);
             }
         }
 
@@ -355,10 +419,10 @@ namespace Had
             _gridHeight = Math.Max(1, _graphics.PreferredBackBufferHeight / CellSize);
         }
 
-        private void SpawnParticle(Vector2 pos, Vector2 vel, float life, Color color, float size, bool background = false)
+        private void SpawnParticle(Vector2 pos, Vector2 vel, float life, Color color, float size, bool background = false, bool persistent = false)
         {
             if ((_bgParticles.Count + _fgParticles.Count) >= MaxParticles) return;
-            var p = new Particle { Position = pos, Velocity = vel, Life = life, MaxLife = life, Color = color, Size = size };
+            var p = new Particle { Position = pos, Velocity = vel, Life = life, MaxLife = life, Color = color, Size = size, IsPersistent = persistent };
             if (background) _bgParticles.Add(p); else _fgParticles.Add(p);
         }
 
@@ -380,7 +444,15 @@ namespace Had
         {
             GraphicsDevice.Clear(new Color(20, 20, 25)); // dark background
 
-            _spriteBatch.Begin(samplerState: SamplerState.PointClamp);
+            // compute shake offset
+            Vector2 shakeOffset = Vector2.Zero;
+            if (_shakeTimer > 0f)
+            {
+                float amt = _shakeAmplitude * (_shakeTimer / _shakeDuration);
+                shakeOffset = new Vector2((float)((_rng.NextDouble() * 2.0) - 1.0), (float)((_rng.NextDouble() * 2.0) - 1.0)) * amt;
+            }
+
+            _spriteBatch.Begin(transformMatrix: Matrix.CreateTranslation(shakeOffset.X, shakeOffset.Y, 0), samplerState: SamplerState.PointClamp);
 
             // Draw background particles first
             for (int i = 0; i < _bgParticles.Count; i++)
@@ -428,7 +500,9 @@ namespace Had
             {
                 var p = _fgParticles[i];
                 var t = MathHelper.Clamp(p.Life / p.MaxLife, 0f, 1f);
-                var col = p.Color * t;
+                // persistent around-snake particles should be 75% transparent (25% opaque)
+                float baseAlpha = p.IsPersistent ? 0.25f : 1f;
+                var col = p.Color * (baseAlpha * t);
                 // render particles larger on screen; keep minimum size
                 var size = Math.Max(2f, p.Size * (0.6f + t * 0.8f));
                 var rect = new Rectangle((int)(p.Position.X - size / 2), (int)(p.Position.Y - size / 2), (int)size, (int)size);
@@ -524,6 +598,7 @@ namespace Had
             public float MaxLife;
             public Color Color;
             public float Size;
+            public bool IsPersistent; // true for particles that stay around snake (semi-transparent)
         }
     }
 }
