@@ -41,8 +41,27 @@ namespace Had
         private readonly Color _snakeFill = Color.White;
         private readonly Color _snakeOutline = new Color(255, 128, 200); // pink
         private readonly Color _cherryColor = Color.Red; // renamed from _appleColor
+        private readonly Color _tailTrailColor = new Color(100, 255, 140);
         private readonly Color _scoreColor = Color.White;
         private readonly Vector2 _scorePosition = new(8, 8);
+
+        // Death / pause snapshot
+        private bool _isDead = false;
+        private bool _takeDeathSnapshot = false;
+        private RenderTarget2D? _deathSnapshot = null;
+        private float _deathZoomTimer = 0f;
+        private const float DeathZoomDuration = 0.8f; // time to zoom in
+        private const float DeathZoomAmount = 1.12f; // final zoom multiplier
+
+        // You died text animation
+        private float _deathPopTimer = 0f;
+        private const float DeathPopDuration = 0.6f;
+        private float _deathIdleAnimTime = 0f;
+        private float _deathPhase = 0f;
+
+        // dismissal (when pressing space) swoosh
+        private float _deathDismissTimer = 0f;
+        private const float DeathDismissDuration = 0.35f;
 
         // Particles: split into background (drawn first) and foreground
         private readonly List<Particle> _bgParticles = new();
@@ -215,10 +234,74 @@ namespace Had
             HandleInput();
 
             var dt = (float)gameTime.ElapsedGameTime.TotalSeconds;
-            _moveTimer += dt;
-            if (_moveTimer >= MoveInterval)
+
+            // if dead, only advance death timers & handle input for restart
+            if (_isDead)
             {
-                _moveTimer -= MoveInterval;
+                // advance zoom timer
+                if (_deathZoomTimer < DeathZoomDuration)
+                {
+                    _deathZoomTimer += dt;
+                    if (_deathZoomTimer > DeathZoomDuration) _deathZoomTimer = DeathZoomDuration;
+                }
+
+                // pop animation countdown
+                if (_deathPopTimer > 0f)
+                {
+                    _deathPopTimer -= dt;
+                    if (_deathPopTimer < 0f) _deathPopTimer = 0f;
+                }
+                else
+                {
+                    _deathIdleAnimTime += dt;
+                }
+
+                // dismissal animation
+                if (_deathDismissTimer > 0f)
+                {
+                    _deathDismissTimer -= dt;
+                    if (_deathDismissTimer <= 0f)
+                    {
+                        // finish dismissal -> restart
+                        _deathDismissTimer = 0f;
+                        _isDead = false;
+                        // clear snapshot
+                        if (_deathSnapshot != null)
+                        {
+                            _deathSnapshot.Dispose();
+                            _deathSnapshot = null;
+                        }
+                        // actually reset game state for a fresh playthrough
+                        _score = 0;
+                        ResetGame();
+                    }
+                }
+
+                // check for space to start dismissal (only if not already dismissing)
+                var kb = Keyboard.GetState();
+                if (kb.IsKeyDown(Keys.Space) && _deathDismissTimer <= 0f)
+                {
+                    _deathDismissTimer = DeathDismissDuration;
+                }
+
+                // while dead, skip further game updates
+                base.Update(gameTime);
+                return;
+            }
+
+            // determine current move interval (faster when streak >= 3 and streak is active)
+            double currentMoveInterval = MoveInterval;
+            bool speedBoostActive = (_streak >= 3 && _timeSinceLastCherry <= StreakTimeout);
+            if (speedBoostActive)
+            {
+                // 1.5x faster -> interval divided by 1.5
+                currentMoveInterval = MoveInterval / 1.5;
+            }
+
+            _moveTimer += dt;
+            if (_moveTimer >= currentMoveInterval)
+            {
+                _moveTimer -= currentMoveInterval;
                 MoveSnake();
             }
 
@@ -259,6 +342,12 @@ namespace Had
             {
                 _cherryParticleTimer -= dt;
                 EmitAroundSnake(dt);
+            }
+
+            // If the temporary speed boost is active (streak >= 3 and streak timer running), emit green tail particles
+            if (speedBoostActive)
+            {
+                EmitTailTrail(dt);
             }
 
             // If score >= threshold, enable a low-intensity persistent background emitter
@@ -325,15 +414,13 @@ namespace Had
             if (newHead.Y < 0) newHead.Y = _gridHeight - 1;
             if (newHead.Y >= _gridHeight) newHead.Y = 0;
 
-            // Self-collision -> reset game (simple)
+            // Self-collision -> start death sequence (freeze frame, zoom, wait for restart)
             for (int i = 0; i < _snake.Count; i++)
             {
                 if (_snake[i] == newHead)
                 {
-                    // reset
-                    _deaths++;
-                    _score = 0;
-                    ResetGame();
+                    // start death instead of immediate reset
+                    StartDeath();
                     return;
                 }
             }
@@ -401,6 +488,19 @@ namespace Had
              }
         }
 
+        private void StartDeath()
+        {
+            _deaths++;
+            _isDead = true;
+            _takeDeathSnapshot = true;
+            _deathZoomTimer = 0f;
+            _deathPopTimer = DeathPopDuration;
+            _deathIdleAnimTime = 0f;
+            _deathPhase = (float)(_rng.NextDouble() * Math.PI * 2.0);
+            _deathDismissTimer = 0f;
+            // leave current game state as-is; snapshot will be taken on next Draw
+        }
+
         private void PlaceCherry()
         {
             // choose a random free cell
@@ -436,6 +536,52 @@ namespace Had
                 var size = (float)(_rng.NextDouble() * 8 + 3) * (1f + _streak * 0.08f);
                 // mark these as persistent (they stay around the snake and should be semi-transparent)
                 SpawnParticle(pos, vel, life, _snakeOutline, size, background: false, persistent: true);
+            }
+        }
+
+        // Emit a short-lived green trail at the snake's tail while speed boost is active
+        private void EmitTailTrail(float dt)
+        {
+            if (_snake.Count == 0) return;
+
+            // Determine tail position and orientation (last segment)
+            var lastIndex = _snake.Count - 1;
+            var tail = _snake[lastIndex];
+
+            Vector2 tailDir;
+            if (_snake.Count >= 2)
+            {
+                var prev = _snake[lastIndex - 1];
+                tailDir = new Vector2(tail.X - prev.X, tail.Y - prev.Y);
+            }
+            else
+            {
+                // fallback: use inverse of current movement direction
+                tailDir = new Vector2(-_direction.X, -_direction.Y);
+            }
+
+            if (tailDir == Vector2.Zero) tailDir = new Vector2(-1, 0);
+            tailDir = Vector2.Normalize(tailDir);
+
+            // screen-space center of the tail cell
+            var tailCenter = new Vector2(tail.X * CellSize + CellSize / 2f, tail.Y * CellSize + CellSize / 2f);
+
+            // spawn a few small green particles per frame; scale with streak but keep low per-frame
+            int perFrame = Math.Min(6, 1 + _streak);
+            for (int i = 0; i < perFrame && (_bgParticles.Count + _fgParticles.Count) < MaxParticles; i++)
+            {
+                // spawn slightly behind the tail along the tail direction
+                var offsetDist = (float)(_rng.NextDouble() * CellSize * 0.6 + CellSize * 0.2);
+                var pos = tailCenter + tailDir * -offsetDist; // behind tail
+
+                // velocity primarily trailing away from tail (opposite of tail direction) with jitter
+                var baseSpeed = (float)(_rng.NextDouble() * 40 + 20);
+                var vel = tailDir * -baseSpeed + new Vector2((float)(_rng.NextDouble() * 40 - 20), (float)(_rng.NextDouble() * 40 - 20));
+
+                var life = 0.35f + (float)(_rng.NextDouble() * 0.6f);
+                var size = (float)(_rng.NextDouble() * 3f + 2f);
+
+                SpawnParticle(pos, vel, life, _tailTrailColor, size, background: false, persistent: false);
             }
         }
 
@@ -512,16 +658,62 @@ namespace Had
 
         protected override void Draw(GameTime gameTime)
         {
-            GraphicsDevice.Clear(new Color(20, 20, 25)); // dark background
+            // If we need to take a death snapshot, render the current scene into a RenderTarget first
+            if (_takeDeathSnapshot)
+            {
+                // create snapshot RT matching backbuffer
+                _deathSnapshot = new RenderTarget2D(GraphicsDevice, _graphics.PreferredBackBufferWidth, _graphics.PreferredBackBufferHeight);
+                GraphicsDevice.SetRenderTarget(_deathSnapshot);
+                // draw the full scene as-is onto the render target (no shake)
+                DrawGameScene(includeShake: false);
+                GraphicsDevice.SetRenderTarget(null);
+                _takeDeathSnapshot = false;
+            }
 
+            if (_isDead && _deathSnapshot != null)
+            {
+                // draw zoomed snapshot
+                GraphicsDevice.Clear(Color.Black);
+                _spriteBatch.Begin(samplerState: SamplerState.PointClamp);
+
+                float t = MathHelper.Clamp(_deathZoomTimer / DeathZoomDuration, 0f, 1f);
+                float zoom = 1f + (DeathZoomAmount - 1f) * (t);
+                // center scale
+                var center = new Vector2(_graphics.PreferredBackBufferWidth / 2f, _graphics.PreferredBackBufferHeight / 2f);
+                var destRect = new Rectangle(0, 0, _graphics.PreferredBackBufferWidth, _graphics.PreferredBackBufferHeight);
+
+                // When zooming we scale around center; draw snapshot scaled and offset
+                var scaledW = _deathSnapshot.Width * zoom;
+                var scaledH = _deathSnapshot.Height * zoom;
+                var dst = new Rectangle((int)(center.X - scaledW / 2f), (int)(center.Y - scaledH / 2f), (int)scaledW, (int)scaledH);
+                _spriteBatch.Draw(_deathSnapshot, dst, Color.White);
+
+                // draw "You died" text with pop/idle, and instruction text
+                DrawDeathUI();
+
+                _spriteBatch.End();
+            }
+            else
+            {
+                // normal scene
+                DrawGameScene(includeShake: true);
+            }
+
+            base.Draw(gameTime);
+        }
+
+        // Draw the full game scene (used for snapshotting and normal draw)
+        private void DrawGameScene(bool includeShake)
+        {
             // compute shake offset
             Vector2 shakeOffset = Vector2.Zero;
-            if (_shakeTimer > 0f)
+            if (includeShake && _shakeTimer > 0f)
             {
                 float amt = _shakeAmplitude * (_shakeTimer / _shakeDuration);
                 shakeOffset = new Vector2((float)((_rng.NextDouble() * 2.0) - 1.0), (float)((_rng.NextDouble() * 2.0) - 1.0)) * amt;
             }
 
+            GraphicsDevice.Clear(new Color(20, 20, 25)); // dark background
             _spriteBatch.Begin(transformMatrix: Matrix.CreateTranslation(shakeOffset.X, shakeOffset.Y, 0), samplerState: SamplerState.PointClamp);
 
             // Draw background particles first
@@ -636,8 +828,51 @@ namespace Had
             }
 
             _spriteBatch.End();
+        }
 
-            base.Draw(gameTime);
+        private void DrawDeathUI()
+        {
+            // draw "You died" centered, with pop/idle and dismissal swoosh
+            float popProgress = 1f;
+            if (_deathPopTimer > 0f) popProgress = 1f - (_deathPopTimer / DeathPopDuration);
+            popProgress = MathHelper.Clamp(popProgress, 0f, 1f);
+
+            float sinPeak = MathF.Sin(popProgress * MathF.PI);
+            float baseScale = 18f;
+            float peakScale = baseScale * 2.0f;
+            float curScaleF = baseScale + (peakScale - baseScale) * sinPeak;
+            int curScale = Math.Max(8, (int)curScaleF);
+
+            float bob = 0f;
+            if (_deathPopTimer > 0f) bob = MathF.Sin(popProgress * MathF.PI) * 14f; else bob = MathF.Sin(_deathIdleAnimTime * 1.1f + _deathPhase) * 10f;
+
+            // dismissal swoosh progress
+            float dismiss = 0f;
+            if (_deathDismissTimer > 0f) dismiss = 1f - (_deathDismissTimer / DeathDismissDuration);
+            dismiss = MathHelper.Clamp(dismiss, 0f, 1f);
+
+            var center = new Vector2(_graphics.PreferredBackBufferWidth * 0.5f, _graphics.PreferredBackBufferHeight * 0.45f);
+            // compute measured widths so we can center exactly
+            float mainWidth = MeasurePixelTextWidth("YOU DIED", curScale);
+            var pos = center + new Vector2(dismiss * 600f, - (curScale * 2f) + bob) - new Vector2(mainWidth * 0.5f, 0);
+
+            // color and alpha reduce on dismiss
+            float alpha = 1f - dismiss;
+            var col = new Color(220, 40, 40) * alpha;
+
+            DrawPixelText("YOU DIED", pos, col, scale: curScale);
+
+            // instruction text below (use slightly larger scale for readability)
+            int instrScale = 3;
+            float instrWidth = MeasurePixelTextWidth("PRESS SPACE TO PLAY AGAIN", instrScale);
+            var instrPos = center + new Vector2(0, 80f + bob) - new Vector2(instrWidth * 0.5f, 0);
+            DrawPixelText("PRESS SPACE TO PLAY AGAIN", instrPos, new Color(200, 200, 200) * alpha, scale: instrScale);
+        }
+
+        private float MeasurePixelTextWidth(string text, int scale)
+        {
+            // each glyph is 3 pixels wide + 1 pixel spacing = 4 columns
+            return text.Length * 4f * scale;
         }
 
         // Draws a 3x5 pixel font for digits + basic symbols.
@@ -681,6 +916,13 @@ namespace Had
             ['A'] = new byte[] { 0b010, 0b101, 0b111, 0b101, 0b101 }, // standard A
             ['T'] = new byte[] { 0b111, 0b010, 0b010, 0b010, 0b010 },
             ['H'] = new byte[] { 0b101, 0b101, 0b111, 0b101, 0b101 },
+            // Additional uppercase glyphs used by death screen and instructions
+            ['Y'] = new byte[] { 0b101, 0b010, 0b010, 0b010, 0b010 },
+            ['I'] = new byte[] { 0b111, 0b010, 0b010, 0b010, 0b111 },
+            ['P'] = new byte[] { 0b110, 0b101, 0b110, 0b100, 0b100 },
+            ['L'] = new byte[] { 0b100, 0b100, 0b100, 0b100, 0b111 },
+            ['G'] = new byte[] { 0b111, 0b100, 0b101, 0b101, 0b111 },
+            ['N'] = new byte[] { 0b101, 0b111, 0b111, 0b101, 0b101 },
         };
 
         // Draw pixel text using the small font above
