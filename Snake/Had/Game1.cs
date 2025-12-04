@@ -26,6 +26,8 @@ namespace Had
         private double _moveTimer;
         private const double MoveInterval = 0.12; // seconds
         private bool _growNextMove;
+        // prevent multiple direction changes between move ticks
+        private bool _directionChanged = false;
 
         // Cherry (was apple)
         private Point _cherry;
@@ -397,10 +399,14 @@ namespace Had
         private void HandleInput()
         {
             var kb = Keyboard.GetState();
-            if (kb.IsKeyDown(Keys.Up) && _direction.Y != 1) _direction = new Point(0, -1);
-            if (kb.IsKeyDown(Keys.Down) && _direction.Y != -1) _direction = new Point(0, 1);
-            if (kb.IsKeyDown(Keys.Left) && _direction.X != 1) _direction = new Point(-1, 0);
-            if (kb.IsKeyDown(Keys.Right) && _direction.X != -1) _direction = new Point(1, 0);
+            // Only allow one direction change per movement tick to avoid quick double-input causing a 180-degree reversal
+            if (!_directionChanged)
+            {
+                if (kb.IsKeyDown(Keys.Up) && _direction.Y != 1) { _direction = new Point(0, -1); _directionChanged = true; }
+                else if (kb.IsKeyDown(Keys.Down) && _direction.Y != -1) { _direction = new Point(0, 1); _directionChanged = true; }
+                else if (kb.IsKeyDown(Keys.Left) && _direction.X != 1) { _direction = new Point(-1, 0); _directionChanged = true; }
+                else if (kb.IsKeyDown(Keys.Right) && _direction.X != -1) { _direction = new Point(1, 0); _directionChanged = true; }
+            }
         }
 
         private void MoveSnake()
@@ -434,6 +440,9 @@ namespace Had
             {
                 _growNextMove = false;
             }
+
+            // allow new direction changes after we've performed a movement
+            _directionChanged = false;
 
             // cherry collision
             if (newHead == _cherry)
