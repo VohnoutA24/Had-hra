@@ -27,8 +27,8 @@ namespace Had
         private const double MoveInterval = 0.12; // seconds
         private bool _growNextMove;
 
-        // Apple
-        private Point _apple;
+        // Cherry (was apple)
+        private Point _cherry;
         private readonly Random _rng = new();
 
         // Score
@@ -38,13 +38,22 @@ namespace Had
         private Texture2D _pixel = null!;
         private readonly Color _snakeFill = Color.White;
         private readonly Color _snakeOutline = new Color(255, 128, 200); // pink
-        private readonly Color _appleColor = Color.Red;
+        private readonly Color _cherryColor = Color.Red; // renamed from _appleColor
         private readonly Color _scoreColor = Color.White;
         private readonly Vector2 _scorePosition = new(8, 8);
 
-        // Particles
-        private readonly List<Particle> _particles = new();
-        private const int MaxParticles = 800;
+        // Particles: split into background (drawn first) and foreground
+        private readonly List<Particle> _bgParticles = new();
+        private readonly List<Particle> _fgParticles = new();
+        // cap total
+        private const int MaxParticles = 8000;
+
+        // Cherry particle timing
+        private float _cherryParticleTimer = 0f;
+        private const float CherryParticleDuration = 2.2f; // seconds of burst after pickup
+
+        // Background emitter enabled at or above this score
+        private const int BackgroundEnableScore = 5;
 
         // Faces
         private readonly List<string> _faces = new() { ":3", "^w^", "˃ w ˂", "UwU", "0w0", "(w)", "n_n" };
@@ -74,8 +83,34 @@ namespace Had
 
         protected override void Initialize()
         {
-            // reset window back to initial and initialize game state
-            ResetGame();
+            // reset window back to initial in case this Initialize is called on death
+            if (_graphics.PreferredBackBufferWidth != _initialBackBufferWidth || _graphics.PreferredBackBufferHeight != _initialBackBufferHeight)
+            {
+                _graphics.PreferredBackBufferWidth = _initialBackBufferWidth;
+                _graphics.PreferredBackBufferHeight = _initialBackBufferHeight;
+                _graphics.ApplyChanges();
+            }
+
+            // ensure grid matches window
+            _gridWidth = _graphics.PreferredBackBufferWidth / CellSize;
+            _gridHeight = _graphics.PreferredBackBufferHeight / CellSize;
+
+            // Initialize snake in center
+            _snake.Clear();
+            var start = new Point(_gridWidth / 2, _gridHeight / 2);
+            _snake.Add(start);
+            _snake.Add(new Point(start.X - 1, start.Y));
+            _snake.Add(new Point(start.X - 2, start.Y));
+            _direction = new Point(1, 0);
+            _moveTimer = 0;
+            _growNextMove = false;
+
+            // start with zero particles
+            _bgParticles.Clear();
+            _fgParticles.Clear();
+            _cherryParticleTimer = 0f;
+
+            PlaceCherry();
 
             base.Initialize();
         }
@@ -106,9 +141,11 @@ namespace Had
             _growNextMove = false;
 
             // clear particles so they don't linger across size changes
-            _particles.Clear();
+            _bgParticles.Clear();
+            _fgParticles.Clear();
+            _cherryParticleTimer = 0f;
 
-            PlaceApple();
+            PlaceCherry();
         }
 
         protected override void LoadContent()
@@ -128,7 +165,7 @@ namespace Had
 
             HandleInput();
 
-            var dt = gameTime.ElapsedGameTime.TotalSeconds;
+            var dt = (float)gameTime.ElapsedGameTime.TotalSeconds;
             _moveTimer += dt;
             if (_moveTimer >= MoveInterval)
             {
@@ -144,15 +181,32 @@ namespace Had
                 _currentFaceIndex = (_currentFaceIndex + 1) % _faces.Count;
             }
 
-            UpdateParticles((float)dt);
+            // Update both particle lists
+            UpdateParticleList(_bgParticles, dt);
+            UpdateParticleList(_fgParticles, dt);
 
-            // Score emitter - spawn a small shivering pink particle near the score every frame (controlled)
-            if (_particles.Count < MaxParticles)
+            // If we have an active cherry burst timer, emit particles around the snake head for a few seconds
+            if (_cherryParticleTimer > 0f)
             {
-                var basePos = new Vector2(_scorePosition.X + 40, _scorePosition.Y + 8);
-                SpawnParticle(basePos + new Vector2((float)(_rng.NextDouble() * 6 - 3), (float)(_rng.NextDouble() * 6 - 3)),
-                    new Vector2((float)(_rng.NextDouble() * 20 - 10), (float)(_rng.NextDouble() * -20)), 0.6f,
-                    _snakeOutline, (float)(_rng.NextDouble() * 2 + 1));
+                _cherryParticleTimer -= dt;
+                EmitAroundSnake(dt);
+            }
+
+            // If score >= threshold, enable a low-intensity persistent background emitter
+            if (_score >= BackgroundEnableScore)
+            {
+                // spawn a few background particles per frame (low intensity)
+                int bgSpawn = 1 + (_score - BackgroundEnableScore) / 2; // slowly increase with score
+                for (int i = 0; i < bgSpawn && (_bgParticles.Count + _fgParticles.Count) < MaxParticles; i++)
+                {
+                    float px = (float)(_rng.NextDouble() * Math.Max(1, _graphics.PreferredBackBufferWidth));
+                    float py = (float)(_rng.NextDouble() * Math.Max(1, _graphics.PreferredBackBufferHeight));
+                    var pos = new Vector2(px, py);
+                    var vel = new Vector2((float)(_rng.NextDouble() * 40 - 20), (float)(_rng.NextDouble() * 40 - 20));
+                    float life = 6f + (float)(_rng.NextDouble() * 6f);
+                    float size = (float)(_rng.NextDouble() * 8 + 2) * 0.6f; // smaller background
+                    SpawnParticle(pos, vel, life, _snakeOutline * 0.6f, size, background: true);
+                }
             }
 
             base.Update(gameTime);
@@ -200,19 +254,24 @@ namespace Had
                 _growNextMove = false;
             }
 
-            // apple collision
-            if (newHead == _apple)
+            // cherry collision
+            if (newHead == _cherry)
             {
                 _score += 1;
                 _growNextMove = true;
-                PlaceApple();
-                SpawnAppleBurst(new Vector2(newHead.X * CellSize + CellSize / 2f, newHead.Y * CellSize + CellSize / 2f));
-                // expand window slightly each time an apple is picked
+                PlaceCherry();
+                SpawnCherryBurst(new Vector2(newHead.X * CellSize + CellSize / 2f, newHead.Y * CellSize + CellSize / 2f));
+                // expand window slightly each time a cherry is picked
                 ExpandWindow();
+
+                // trigger a short-lived emitter around the snake
+                _cherryParticleTimer = CherryParticleDuration;
+                // initial burst around snake
+                SpawnBurstAroundSnake(newHead, count: 48 + Math.Min(200, _score * 8));
             }
         }
 
-        private void PlaceApple()
+        private void PlaceCherry()
         {
             // choose a random free cell
             var free = new List<Point>();
@@ -226,26 +285,59 @@ namespace Had
             if (free.Count == 0)
             {
                 // full grid (win) -> reset
-                Initialize();
+                ResetGame();
                 return;
             }
 
-            _apple = free[_rng.Next(free.Count)];
+            _cherry = free[_rng.Next(free.Count)];
         }
 
-        private void SpawnAppleBurst(Vector2 position)
+        private void SpawnBurstAroundSnake(Point gridPos, int count)
         {
-            // burst of pink particles
-            int n = 36;
-            for (int i = 0; i < n; i++)
+            var center = new Vector2(gridPos.X * CellSize + CellSize / 2f, gridPos.Y * CellSize + CellSize / 2f);
+            for (int i = 0; i < count && (_bgParticles.Count + _fgParticles.Count) < MaxParticles; i++)
             {
-                if (_particles.Count >= MaxParticles) break;
                 var angle = (float)(_rng.NextDouble() * Math.PI * 2.0);
-                var speed = (float)(_rng.NextDouble() * 120 + 40);
+                var dist = (float)(_rng.NextDouble() * CellSize * 1.2);
+                var pos = center + new Vector2((float)Math.Cos(angle), (float)Math.Sin(angle)) * dist;
+                var speed = (float)(_rng.NextDouble() * 220 + 40);
+                var vel = new Vector2((float)Math.Cos(angle), (float)Math.Sin(angle)) * speed + new Vector2((float)(_rng.NextDouble() * 40 - 20), (float)(_rng.NextDouble() * 40 - 20));
+                var life = 0.8f + (float)(_rng.NextDouble() * 1.2f);
+                var size = (float)(_rng.NextDouble() * 8 + 3) * (1f + _score * 0.08f);
+                SpawnParticle(pos, vel, life, _snakeOutline, size, background: false);
+            }
+        }
+
+        private void EmitAroundSnake(float dt)
+        {
+            // emit a modest number of particles per frame around head while timer active
+            int perFrame = 8 + (int)(_score / 2);
+            var head = _snake[0];
+            var center = new Vector2(head.X * CellSize + CellSize / 2f, head.Y * CellSize + CellSize / 2f);
+            for (int i = 0; i < perFrame && (_bgParticles.Count + _fgParticles.Count) < MaxParticles; i++)
+            {
+                var angle = (float)(_rng.NextDouble() * Math.PI * 2.0);
+                var dist = (float)(_rng.NextDouble() * CellSize * 0.9);
+                var pos = center + new Vector2((float)Math.Cos(angle), (float)Math.Sin(angle)) * dist;
+                var vel = new Vector2((float)(_rng.NextDouble() * 80 - 40), (float)(_rng.NextDouble() * -80));
+                var life = 0.6f + (float)(_rng.NextDouble() * 1.0f);
+                var size = (float)(_rng.NextDouble() * 6 + 2) * (1f + _score * 0.06f);
+                SpawnParticle(pos, vel, life, _snakeOutline, size, background: false);
+            }
+        }
+
+        private void SpawnCherryBurst(Vector2 position)
+        {
+            // smaller additional pickup burst (foreground)
+            int n = 36 + Math.Min(300, _score * 12);
+            for (int i = 0; i < n && (_bgParticles.Count + _fgParticles.Count) < MaxParticles; i++)
+            {
+                var angle = (float)(_rng.NextDouble() * Math.PI * 2.0);
+                var speed = (float)(_rng.NextDouble() * 220 + 60);
                 var vel = new Vector2((float)Math.Cos(angle), (float)Math.Sin(angle)) * speed;
-                var life = (float)(_rng.NextDouble() * 0.7 + 0.4);
-                var size = (float)(_rng.NextDouble() * 3 + 2);
-                SpawnParticle(position, vel, life, _snakeOutline, size);
+                var life = 0.6f + (float)(_rng.NextDouble() * 1.2f);
+                var size = (float)(_rng.NextDouble() * 8 + 3) * (1f + _score * 0.08f);
+                SpawnParticle(position, vel, life, _snakeOutline, size, background: false);
             }
         }
 
@@ -263,22 +355,24 @@ namespace Had
             _gridHeight = Math.Max(1, _graphics.PreferredBackBufferHeight / CellSize);
         }
 
-        private void SpawnParticle(Vector2 pos, Vector2 vel, float life, Color color, float size)
+        private void SpawnParticle(Vector2 pos, Vector2 vel, float life, Color color, float size, bool background = false)
         {
-            _particles.Add(new Particle { Position = pos, Velocity = vel, Life = life, MaxLife = life, Color = color, Size = size });
+            if ((_bgParticles.Count + _fgParticles.Count) >= MaxParticles) return;
+            var p = new Particle { Position = pos, Velocity = vel, Life = life, MaxLife = life, Color = color, Size = size };
+            if (background) _bgParticles.Add(p); else _fgParticles.Add(p);
         }
 
-        private void UpdateParticles(float dt)
+        private void UpdateParticleList(List<Particle> list, float dt)
         {
-            for (int i = _particles.Count - 1; i >= 0; i--)
+            for (int i = list.Count - 1; i >= 0; i--)
             {
-                var p = _particles[i];
+                var p = list[i];
                 p.Velocity *= 0.98f; // drag
-                p.Velocity += new Vector2(0, 50f) * dt; // gravity subtle
+                p.Velocity += new Vector2(0, 40f) * dt; // gravity subtle
                 p.Position += p.Velocity * dt;
                 p.Life -= dt;
-                _particles[i] = p;
-                if (p.Life <= 0) _particles.RemoveAt(i);
+                list[i] = p;
+                if (p.Life <= 0) list.RemoveAt(i);
             }
         }
 
@@ -288,8 +382,19 @@ namespace Had
 
             _spriteBatch.Begin(samplerState: SamplerState.PointClamp);
 
-            // Draw apple (red square)
-            DrawCell(_apple, _appleColor);
+            // Draw background particles first
+            for (int i = 0; i < _bgParticles.Count; i++)
+            {
+                var p = _bgParticles[i];
+                var t = MathHelper.Clamp(p.Life / p.MaxLife, 0f, 1f);
+                var col = p.Color * (0.4f * t); // make background more subtle
+                var size = Math.Max(2f, p.Size * (0.5f + t * 0.7f));
+                var rect = new Rectangle((int)(p.Position.X - size / 2), (int)(p.Position.Y - size / 2), (int)size, (int)size);
+                _spriteBatch.Draw(_pixel, rect, col);
+            }
+
+            // Draw cherry (red square)
+            DrawCell(_cherry, _cherryColor);
 
             // Draw snake segments (outline then fill)
             for (int i = _snake.Count - 1; i >= 0; i--)
@@ -318,13 +423,14 @@ namespace Had
             DrawPixelText("SCORE", _scorePosition, _scoreColor, scale: 2);
             DrawPixelText(_score.ToString(), _scorePosition + new Vector2(44, 0), _scoreColor, scale: 2);
 
-            // Draw particles (as circles approximated by square with alpha)
-            for (int i = 0; i < _particles.Count; i++)
+            // Draw foreground particles (bursts around snake)
+            for (int i = 0; i < _fgParticles.Count; i++)
             {
-                var p = _particles[i];
+                var p = _fgParticles[i];
                 var t = MathHelper.Clamp(p.Life / p.MaxLife, 0f, 1f);
                 var col = p.Color * t;
-                var size = Math.Max(1f, p.Size * (0.5f + t * 0.5f));
+                // render particles larger on screen; keep minimum size
+                var size = Math.Max(2f, p.Size * (0.6f + t * 0.8f));
                 var rect = new Rectangle((int)(p.Position.X - size / 2), (int)(p.Position.Y - size / 2), (int)size, (int)size);
                 _spriteBatch.Draw(_pixel, rect, col);
             }
