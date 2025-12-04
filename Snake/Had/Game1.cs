@@ -42,6 +42,12 @@ namespace Had
         private readonly List<Particle> _particles = new();
         private const int MaxParticles = 800;
 
+        // Faces
+        private readonly List<string> _faces = new() { ":3", "^w^", "˃ w ˂", "UwU", "0w0", "(w)", "n_n" };
+        private int _currentFaceIndex = 0;
+        private double _faceTimer = 0.0;
+        private const double FaceInterval = 0.7; // seconds between face changes
+
         public Game1()
         {
             _graphics = new GraphicsDeviceManager(this);
@@ -94,6 +100,14 @@ namespace Had
             {
                 _moveTimer -= MoveInterval;
                 MoveSnake();
+            }
+
+            // Face rotation timer
+            _faceTimer += dt;
+            if (_faceTimer >= FaceInterval)
+            {
+                _faceTimer -= FaceInterval;
+                _currentFaceIndex = (_currentFaceIndex + 1) % _faces.Count;
             }
 
             UpdateParticles((float)dt);
@@ -244,7 +258,9 @@ namespace Had
                 // head face on the first (index 0)
                 if (i == 0)
                 {
-                    DrawPixelText(":3", screenPos + new Vector2(6, 6), Color.Black, scale: 2);
+                    var face = _faces[_currentFaceIndex];
+                    // center the face inside the cell
+                    DrawPixelText(face, screenPos + new Vector2(6, 8), Color.Black, scale: 2);
                 }
             }
 
@@ -290,6 +306,19 @@ namespace Had
             ['O'] = new byte[] { 0b111, 0b101, 0b101, 0b101, 0b111 },
             ['R'] = new byte[] { 0b110, 0b101, 0b110, 0b101, 0b101 },
             ['E'] = new byte[] { 0b111, 0b100, 0b111, 0b100, 0b111 },
+
+            // Extra glyphs for cute faces
+            ['^'] = new byte[] { 0b010, 0b101, 0b000, 0b000, 0b000 },
+            ['w'] = new byte[] { 0b101, 0b101, 0b101, 0b111, 0b000 },
+            [' '] = new byte[] { 0b000, 0b000, 0b000, 0b000, 0b000 },
+            ['U'] = new byte[] { 0b101, 0b101, 0b101, 0b101, 0b111 },
+            // small wedge characters (˃ and ˂) map to similar angled shapes
+            ['˃'] = new byte[] { 0b001, 0b010, 0b100, 0b010, 0b001 },
+            ['˂'] = new byte[] { 0b100, 0b010, 0b001, 0b010, 0b100 },
+            ['('] = new byte[] { 0b010, 0b100, 0b100, 0b100, 0b010 },
+            [')'] = new byte[] { 0b010, 0b001, 0b001, 0b001, 0b010 },
+            ['n'] = new byte[] { 0b000, 0b110, 0b101, 0b101, 0b101 },
+            ['_'] = new byte[] { 0b000, 0b000, 0b000, 0b000, 0b111 },
         };
 
         // Draw pixel text using the small font above
@@ -300,7 +329,9 @@ namespace Had
             {
                 if (!_fontMap.TryGetValue(ch, out var pattern))
                 {
-                    pattern = _fontMap['S'];
+                    // skip unknown chars (avoid fallback showing 'S')
+                    x += 4 * scale; // still advance for spacing so faces keep relative layout
+                    continue;
                 }
 
                 for (int row = 0; row < pattern.Length; row++)
