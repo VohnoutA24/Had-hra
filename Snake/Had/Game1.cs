@@ -33,6 +33,8 @@ namespace Had
 
         // Score
         private int _score;
+        // Deaths
+        private int _deaths;
 
         // Rendering helpers
         private Texture2D _pixel = null!;
@@ -125,6 +127,7 @@ namespace Had
             _cherryParticleTimer = 0f;
             _streak = 0;
             _timeSinceLastCherry = 100f;
+            _deaths = 0;
 
             PlaceCherry();
 
@@ -271,6 +274,7 @@ namespace Had
                 if (_snake[i] == newHead)
                 {
                     // reset
+                    _deaths++;
                     _score = 0;
                     ResetGame();
                     return;
@@ -493,7 +497,12 @@ namespace Had
 
             // Draw score label "SCORE" using the same pixel font and keep numeric score to the right
             DrawPixelText("SCORE", _scorePosition, _scoreColor, scale: 2);
-            DrawPixelText(_score.ToString(), _scorePosition + new Vector2(44, 0), _scoreColor, scale: 2);
+            // move score number farther right for readability
+            DrawPixelText(_score.ToString(), _scorePosition + new Vector2(68, 0), _scoreColor, scale: 2);
+            // Draw deaths label further down and move its number farther right
+            var deathsLabelPos = _scorePosition + new Vector2(0, 28);
+            DrawPixelText("DEATHS", deathsLabelPos, _scoreColor, scale: 2);
+            DrawPixelText(_deaths.ToString(), deathsLabelPos + new Vector2(68, 0), _scoreColor, scale: 2);
 
             // Draw foreground particles (bursts around snake)
             for (int i = 0; i < _fgParticles.Count; i++)
@@ -549,6 +558,12 @@ namespace Had
             [')'] = new byte[] { 0b010, 0b001, 0b001, 0b001, 0b010 },
             ['n'] = new byte[] { 0b000, 0b110, 0b101, 0b101, 0b101 },
             ['_'] = new byte[] { 0b000, 0b000, 0b000, 0b000, 0b111 },
+
+            // Deaths label letters
+            ['D'] = new byte[] { 0b110, 0b101, 0b101, 0b101, 0b110 }, // clearer D
+            ['A'] = new byte[] { 0b010, 0b101, 0b111, 0b101, 0b101 }, // standard A
+            ['T'] = new byte[] { 0b111, 0b010, 0b010, 0b010, 0b010 },
+            ['H'] = new byte[] { 0b101, 0b101, 0b111, 0b101, 0b101 },
         };
 
         // Draw pixel text using the small font above
