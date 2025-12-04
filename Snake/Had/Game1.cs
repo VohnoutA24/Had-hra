@@ -85,6 +85,11 @@ namespace Had
         // fade when streak runs out
         private float _streakFadeTimer = 0f;
         private const float StreakFadeDuration = 0.6f;
+        // idle animation so the big number feels alive while sitting
+        private float _streakIdleAnimTime = 0f;
+        private float _streakPhase = 0f;
+        private const float StreakIdleSpeed = 1.2f;
+        private const float StreakIdleAmplitude = 20f;
 
         public Game1()
         {
@@ -142,6 +147,8 @@ namespace Had
             _streakDisplayNumber = 0;
             _streakPopTimer = 0f;
             _streakFadeTimer = 0f;
+            _streakIdleAnimTime = 0f;
+            _streakPhase = (float)(_rng.NextDouble() * Math.PI * 2.0);
 
             PlaceCherry();
 
@@ -184,6 +191,8 @@ namespace Had
             _streakDisplayNumber = 0;
             _streakPopTimer = 0f;
             _streakFadeTimer = 0f;
+            _streakIdleAnimTime = 0f;
+            _streakPhase = (float)(_rng.NextDouble() * Math.PI * 2.0);
 
             PlaceCherry();
         }
@@ -287,6 +296,12 @@ namespace Had
                 }
             }
 
+            // idle animation time advances while a streak number is shown
+            if (_streakDisplayNumber > 0 && _streakFadeTimer <= 0f)
+            {
+                _streakIdleAnimTime += dt * StreakIdleSpeed;
+            }
+
             base.Update(gameTime);
         }
 
@@ -380,7 +395,10 @@ namespace Had
                 _streakPopTimer = StreakPopDuration;
                 // cancel any fade-out in progress
                 _streakFadeTimer = 0f;
-            }
+                // reset idle anim time and pick a fresh phase so motion varies
+                _streakIdleAnimTime = 0f;
+                _streakPhase = (float)(_rng.NextDouble() * Math.PI * 2.0);
+             }
         }
 
         private void PlaceCherry()
@@ -548,7 +566,21 @@ namespace Had
                 float centerX = _graphics.PreferredBackBufferWidth * 0.5f;
                 float topY = MathF.Max(10f, _graphics.PreferredBackBufferHeight * 0.12f);
                 // slight bob while popping
-                float bob = (_streakPopTimer > 0f) ? MathF.Sin(popProgress * MathF.PI) * 12f : 0f;
+                float bob = 0f;
+                // while popping, keep a stronger bob; otherwise use subtle idle floating motion
+                if (_streakPopTimer > 0f)
+                {
+                    bob = MathF.Sin(popProgress * MathF.PI) * 12f;
+                }
+                else
+                {
+                    // idle float using sine/cos with phase for smoother motion
+                    float fx = MathF.Cos(_streakIdleAnimTime + _streakPhase) * StreakIdleAmplitude * 0.35f;
+                    float fy = MathF.Sin(_streakIdleAnimTime * 1.3f + _streakPhase * 0.7f) * StreakIdleAmplitude * 0.45f;
+                    bob = fy;
+                    // shift centerX slightly for horizontal float
+                    centerX += fx * 0.6f;
+                }
                 var drawPos = new Vector2(centerX - (4 * curScale) * 0.5f, topY - (curScale * 2f) + bob);
 
                 DrawPixelText(num.ToString(), drawPos, col, scale: curScale);
