@@ -248,8 +248,9 @@ namespace Had
                 }
             }
 
-            // Draw score text as white blocky text (no SpriteFont required)
-            DrawPixelText($"Score:{_score}", _scorePosition, _scoreColor, scale: 2);
+            // Draw score label "SCORE" using the same pixel font and keep numeric score to the right
+            DrawPixelText("SCORE", _scorePosition, _scoreColor, scale: 2);
+            DrawPixelText(_score.ToString(), _scorePosition + new Vector2(44, 0), _scoreColor, scale: 2);
 
             // Draw particles (as circles approximated by square with alpha)
             for (int i = 0; i < _particles.Count; i++)
@@ -282,7 +283,13 @@ namespace Had
             ['8'] = new byte[] { 0b111, 0b101, 0b111, 0b101, 0b111 },
             ['9'] = new byte[] { 0b111, 0b101, 0b111, 0b001, 0b111 },
             [':'] = new byte[] { 0b000, 0b010, 0b000, 0b010, 0b000 },
-            ['S'] = new byte[] { 0b111, 0b100, 0b111, 0b001, 0b111 } // fallback
+
+            // Uppercase letters used in the score label
+            ['S'] = new byte[] { 0b111, 0b100, 0b111, 0b001, 0b111 },
+            ['C'] = new byte[] { 0b111, 0b100, 0b100, 0b100, 0b111 },
+            ['O'] = new byte[] { 0b111, 0b101, 0b101, 0b101, 0b111 },
+            ['R'] = new byte[] { 0b110, 0b101, 0b110, 0b101, 0b101 },
+            ['E'] = new byte[] { 0b111, 0b100, 0b111, 0b100, 0b111 },
         };
 
         // Draw pixel text using the small font above
